@@ -1,6 +1,15 @@
 {
   "presets": [
     "react",
-    "latest-minimal"
-  ]
+    ["env",
+     {
+       "targets": {
+         "node": "current"
+       }
+     }
+    ]
+  ],
+  'plugins': [
+    'transform-object-rest-spread',
+  ],
 }

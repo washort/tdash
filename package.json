@@ -7,7 +7,8 @@
   "scripts": {
     "build": "babel src --out-dir lib",
     "test": "npm run test:lint",
-    "test:lint": "eslint src"
+    "test:lint": "eslint src",
+    "react-devtools": "react-devtools"
   },
   "repository": {
     "type": "git",
@@ -32,11 +33,15 @@
     "eslint": "^4.17.0",
     "eslint-config-airbnb-base": "^12.1.0",
     "eslint-plugin-import": "^2.8.0",
-    "eslint-plugin-react": "^7.6.1"
+    "eslint-plugin-react": "^7.6.1",
+    "react-devtools": "^3.1.0"
   },
   "dependencies": {
+    "babel-plugin-transform-object-rest-spread": "^6.26.0",
+    "babel-preset-env": "^1.6.1",
     "blessed": "^0.1.81",
     "blessed-contrib": "^4.8.5",
+    "got": "^6.7.1",
     "react": "^16.2.0",
     "react-blessed": "^0.2.1",
     "react-blessed-contrib": "^0.2.0"
