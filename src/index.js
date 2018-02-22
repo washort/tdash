@@ -1,7 +1,7 @@
 import got from 'got';
 import React, { Component } from 'react'
 import blessed from 'blessed';
-import { render } from 'react-blessed';
+import { render, list } from 'react-blessed';
 import contrib from 'blessed-contrib'
 import { Table } from 'react-blessed-contrib';
 const API_URL = "https://sql.telemetry.mozilla.org/api";
@@ -74,7 +74,7 @@ const boxStyle = {
   focus: {
     border: {bg: 'cyan', fg: 'red'}
   },
-  border: {fg: 'cyan'}
+  border: {fg: 'cyan'},
 };
 
 function processQuery(contents) {
@@ -88,15 +88,16 @@ function processQuery(contents) {
 function pollForResult(res) {
   if (res.statusCode == 200) {
     const jobData = res.body.job;
-    screen.debug(`res is ${JSON.stringify(jobData)}`);
+    if (jobData.error) {
+      screen.debug(`Query error: ${jobData.error}`);
+      throw jobData.error;
+    }
     if (jobData.query_result_id) {
-      screen.debug(`fetching /query_results/${jobData.query_result_id}`);
       return got(API_URL + "/query_results/" + jobData.query_result_id, {
                  headers: {Cookie: process.env.REDASH_COOKIE},
                  json: true});
     } else {
       return later(1000).then(() =>
-        screen.debug(`trying /jobs/${jobData.id}`) || 
         got(API_URL + "/jobs/" + jobData.id, {
             headers: {Cookie: process.env.REDASH_COOKIE},
             json: true})).then(pollForResult);
@@ -107,8 +108,7 @@ function pollForResult(res) {
 }
 
 function tableize(redashData) {
-  screen.debug(`got ${redashData}`);
-  const baseColWidth = (screen.width - 16) / redashData.columns.length;
+  const baseColWidth = (screen.width - 2) / redashData.columns.length;
   // Even spacing, for now.
   const columnWidth = Array(redashData.columns.length).fill(baseColWidth);
   const colNames = redashData.columns.map((col) => col.friendly_name);
@@ -117,7 +117,6 @@ function tableize(redashData) {
     tableRows.push(colNames.map((name) => row[name]));
   }
   const out = {tableData: {headers: colNames, data: tableRows}, columnWidth};
-  screen.debug(`awesome awesome, data is ${JSON.stringify(out)}`);
   return out
 }
 function shutdown(code, msg) {
@@ -140,21 +139,34 @@ class App extends Component {
       columnWidth: [],
 
       showQuerySelector: false,
-      queryList: [],
+      queryList: null,
       selectedQuery: null
     };
     this.submitQuery = () => processQuery(this.query.value).then((res) =>
-        this.setState(Object.assign(this.state, tableize(res.body.query_result.data)))).catch((err) => {
+        this.setState(tableize(res.body.query_result.data))).catch((err) => {
           console.log(err);
           screen.debug(err.toString());
         });
-    this.loadQuery = (name, i) => {this.state.selectedQuery = i};
-    this.getQueryText = () => (this.state.selectedQuery == null) ? {} : {value: this.state.queryList[this.state.selectedQuery].text};
+    this.loadQuery = (name, i) => this.setState({selectedQuery: i, showQuerySelector: false});
+    this.getQueryText = () => (this.state.selectedQuery == null) ? {} : {value: this.state.queryList[this.state.selectedQuery].query};
+    this.fetchQueryList = () => {
+      if (!this.state.queryList) {
+        return got(API_URL + `/queries?page=1&page_size=${screen.height - 2}`, {
+          headers: {Cookie: process.env.REDASH_COOKIE},
+          json: true}).then((res) => res.body.results);
+      } else {
+        return Promise.resolve(this.state.queryList);
+      }
+    };
   }
 
   componentDidMount () {
     const { screen } = this.props;
     screen.key([ 'q', 'C-c' ], shutdown);
+    screen.key([ 'f6' ], () => {this.fetchQueryList().then(
+      (ql) => this.setState({queryList: ql,
+                             showQuerySelector: !this.state.showQuerySelector},
+                            () => this.refs.queryList.focus()))});
     screen.key([ 'f10' ], this.submitQuery);
     screen.key('tab', screen.focusNext());
     this.query = this.refs.query.refs.txt;
@@ -162,7 +174,6 @@ class App extends Component {
   }
 
   render () {
-    screen.debug("columnWidth is", JSON.stringify(this.state.columnWidth));
     return <element>
             <TextAreaWithLegend
              height="50%" label="Query" border={{type: 'line'}}
@@ -171,13 +182,6 @@ class App extends Component {
              style={boxStyle}
              legend={[["^E", "editor"], ["F6", "load"], ["F8", "save"], ["F10", "execute"]]}
              {...this.getQueryText()} />
-            {this.state.showQuerySelector && <List
-             style={boxStyle}
-             keys={true}
-             items={this.state.queryList.map((q) => q.name)}
-             onSelect={this.loadQuery}
-             onCancel={() => {this.state.showQuerySelector = false;}}
-             />}
             <Table2 top="50%" height="50%" border={{type: 'line'}}
              ref="table"
              screen={screen}
@@ -186,6 +190,19 @@ class App extends Component {
              columnSpacing={1}
              columnWidth={this.state.columnWidth}
              data={this.state.tableData} />
+            {this.state.showQuerySelector && <list style={boxStyle}
+             height="100%"
+             width="50%"
+             left="25%"
+             ref="queryList"
+             border={{type: 'line'}}
+             selectedInverse={true}
+             keys={true}
+             items={this.state.queryList.map((q) => q.name)}
+             onSelect={this.loadQuery}
+             onCancel={() => {this.state.showQuerySelector = false;}}
+             interactive={true}
+             />}
            </element>
   }
 }
