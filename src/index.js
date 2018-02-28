@@ -4,7 +4,7 @@ import blessed from 'blessed';
 import { render, list } from 'react-blessed';
 import contrib from 'blessed-contrib'
 import { Table } from 'react-blessed-contrib';
-const API_URL = "https://sql.telemetry.mozilla.org/api";
+const API_URL = "https://pipeline-sql.stage.mozaws.net/api";
 
 
 function later(delay) {
@@ -28,6 +28,9 @@ class Table2 extends Component {
     this.componentDidMount = setTableWidgetData;
     this.componentDidUpdate = setTableWidgetData;
   }
+  focus() {
+    this.widget.focus()
+  }
 
   render() {
     const { data, ...props } = this.props;
@@ -42,13 +45,15 @@ class Table2 extends Component {
 
 // Component for showing help text under a textarea
 class TextAreaWithLegend extends Component {
-  constructor (props) {
+  constructor(props) {
     super(props);
     this.props = props;
     this.legend = props.legend || [];
   }
-
-  render () {
+  focus() {
+    this.refs.txt.focus()
+  }
+  render() {
     const legendTexts = this.legend.map(([key, name]) => [`{inverse}${key}{/inverse} ${name}`, 3 + key.length + name.length ]);
     const legendElts = [];
     let leftOffset = 1;
@@ -63,13 +68,6 @@ class TextAreaWithLegend extends Component {
   }
 }
 
-const exampleData = {
-  headers: ['id', 'name', 'color'],
-  data: [[1, 'gomez', 'red'],
-         [2, 'morticia', 'green'],
-         [3, 'fester', 'violet']]
-};
-
 const boxStyle = {
   focus: {
     border: {bg: 'cyan', fg: 'red'}
@@ -80,7 +78,7 @@ const boxStyle = {
 function processQuery(contents) {
   return got.post(API_URL + "/query_results", {
     headers: {Cookie: process.env.REDASH_COOKIE},
-    body: JSON.stringify({data_source_id: 10, query: contents, max_age: 0}),
+    body: JSON.stringify({data_source_id: 1, query: contents, max_age: 0}),
     json: true
   }).then(pollForResult);
 }
@@ -131,24 +129,57 @@ function shutdown(code, msg) {
 
 }
 
+class Visualization extends Component {
+  cycleRight() {screen.debug('right');}
+  cycleLeft() {screen.debug('left');}
+  focus() {
+    this.refs.table.focus();
+  }
+  render() {
+    let self = this;
+    function bindKeys(el) {
+      if (el) {
+        screen.debug('Widget acquired');
+        self.widget = el.widget;
+        el.widget.key(['right'], self.cycleRight);
+        el.widget.key(['left'], self.cycleLeft);
+      } else {
+        self.widget = null;
+      }
+    };
+    return <Table2 ref="table" {...this.props} />
+  }
+}
+
 class App extends Component {
   constructor (props) {
     super(props);
     this.state = {
       tableData: {headers: [], data: []},
       columnWidth: [],
-
+      dataSource: 1,
       showQuerySelector: false,
       queryList: null,
       selectedQuery: null
     };
-    this.submitQuery = () => processQuery(this.query.value).then((res) =>
+    let self = this;
+    function* tabCyclerFn() {
+      while (true) {
+        for (let name of Object.getOwnPropertyNames(self.refs)) {
+          yield self.refs[name];
+        }
+      }
+    }
+    let tabCycler = tabCyclerFn();
+    this.cycleFocus = () => {screen.debug('tab'); tabCycler.next().value.focus();};
+    this.submitQuery = () => processQuery(this.query.value, this.state.dataSource).then((res) =>
         this.setState(tableize(res.body.query_result.data))).catch((err) => {
           console.log(err);
           screen.debug(err.toString());
         });
     this.loadQuery = (name, i) => this.setState({selectedQuery: i, showQuerySelector: false});
     this.getQueryText = () => (this.state.selectedQuery == null) ? {} : {value: this.state.queryList[this.state.selectedQuery].query};
+    this.getQueryName = () => (this.state.selectedQuery == null) ? "New Query" : this.state.queryList[this.state.selectedQuery].name;
     this.fetchQueryList = () => {
       if (!this.state.queryList) {
         return got(API_URL + `/queries?page=1&page_size=${screen.height - 2}`, {
@@ -158,35 +189,66 @@ class App extends Component {
         return Promise.resolve(this.state.queryList);
       }
     };
+    this.pickFromQueryList = () => {
+      this.fetchQueryList().then((ql) =>
+                                 this.setState(
+                                   {
+                                     queryList: ql,
+                                     showQuerySelector: !this.state.showQuerySelector
+                                   },
+                                   () => this.refs.queryList.focus()));
+    };
+    this.getDataSourceName = () => "Redash Metadata";
+    this.fetchDataSourceList = () => {
+      if (!this.state.queryList) {
+        return got(API_URL + `/data_sources`, {
+          headers: {Cookie: process.env.REDASH_COOKIE},
+          json: true}).then((res) => res.body);
+      } else {
+        return Promise.resolve(this.state.dataSourceList);
+      }
+    };
+
+    this.pickFromDataSourceList = () => {
+      this.fetchDataSourceList().then((dss) =>
+                                      this.setState(
+                                        {
+                                          dataSourceList: dss,
+                                          showDataSourceSelector: !this.state.showDataSourceSelector
+                                        },
+                                        () => this.refs.dataSourceList.focus()))
+      };
+
   }
 
   componentDidMount () {
     const { screen } = this.props;
     screen.key([ 'q', 'C-c' ], shutdown);
-    screen.key([ 'f6' ], () => {this.fetchQueryList().then(
-      (ql) => this.setState({queryList: ql,
-                             showQuerySelector: !this.state.showQuerySelector},
-                            () => this.refs.queryList.focus()))});
+    screen.key([ 'f4' ], () => this.pickFromDataSourceList());
+    screen.key([ 'f6' ], this.pickFromQueryList);
     screen.key([ 'f10' ], this.submitQuery);
-    screen.key('tab', screen.focusNext());
+    screen.key('tab', this.cycleFocus);
     this.query = this.refs.query.refs.txt;
-    this.query.focus();
+
   }
 
   render () {
     return <element>
             <TextAreaWithLegend
-             height="50%" label="Query" border={{type: 'line'}}
+             height="50%"
+             label={`${this.getQueryName()} - ${this.getDataSourceName()}`}
+             border={{type: 'line'}}
              keys={true}
              ref="query"
              style={boxStyle}
-             legend={[["^E", "editor"], ["F6", "load"], ["F8", "save"], ["F10", "execute"]]}
+             legend={[["^E", "editor"], ["F4", "data source"], ["F6", "load"], ["F8", "save"], ["F10", "execute"]]}
              {...this.getQueryText()} />
-            <Table2 top="50%" height="50%" border={{type: 'line'}}
-             ref="table"
+            <Visualization
              screen={screen}
+             top="50%" height="50%"
+             ref="vis"
              style={boxStyle}
-             label="Results"
+             border={{type: 'line'}}
              columnSpacing={1}
              columnWidth={this.state.columnWidth}
              data={this.state.tableData} />
@@ -206,9 +268,10 @@ class App extends Component {
            </element>
   }
 }
-
+var screen;
 const program = blessed.program()
-var screen = blessed.screen({
+setTimeout(() => {
+screen = blessed.screen({
   autoPadding: true,
   smartCSR: true,
   dockBorders: true,
@@ -219,3 +282,4 @@ var screen = blessed.screen({
 });
 
 render(<App screen={screen} />, screen)
+}, 3000)
